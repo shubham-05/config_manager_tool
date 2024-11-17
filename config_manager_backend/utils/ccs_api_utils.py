@@ -1,5 +1,5 @@
 import asyncio
-import config_manager_backend.logger as logger
+import logger
 import aiohttp
 
 logger = logger.main("ccs_api_utils")
@@ -17,7 +17,7 @@ async def retriable_api_call(func, url, **kwargs):
     # stop if no retry needed or retry delay exceed 80s (after 5 exponential retries)
     while need_retry and retry_delay < MAX_RETRY_SECONDS:
         async with aiohttp.ClientSession() as session:
-            async with session.request(func, url, **kwargs) as response:
+            async with session.request(func, url, **kwargs, ssl=False) as response:
                 if 500 <= response.status <= 599:
                     retry_msg = f"Retrying in {retry_delay}s." + (
                         " Reaching retry limit. Will not retry if failed again!"

@@ -1,79 +1,100 @@
 from fastapi import FastAPI, HTTPException
-from utils.ccs_api_utils import retriable_api_call
+from utils.ccs_api_utils import retriable_api_call, logger
 import aiohttp
-import logger
+from logger import main as logger_main
+from pydantic import BaseModel
 
 # Initialize FastAPI app
 app = FastAPI()
 
 # Initialise logger
-logger = logger.main(__name__)
+logger = logger_main(__name__)
 
 # Remote service base URL (replace with your actual service URL)
-REMOTE_SERVICE_URL = "https://central-config-service.prod.conviva.com"
-GET_API_PATH = "/v1/config/"
+REMOTE_SERVICE_URL = "https://central-config-service.qe2.conviva.com"
 WORKFLOW_NAME = "batch"
+REQUEST_API_PATH = "/v1/config/"
+CONFIG_META_PATH = "/v1/config/meta"
+CONFIG_CREATE_PATH = "/v1/config/create"
+CONFIG_HISTORY_PATH = "/v2.1/config/"
 
-# Function to make HTTP requests using aiohttp
-async def fetch_remote_data(endpoint: str, params=None, method="GET", data=None):
-    async with aiohttp.ClientSession() as session:
-        url = f"{REMOTE_SERVICE_URL}/{endpoint}"
-        try:
-            if method == "GET":
-                async with session.get(url, params=params) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            elif method == "POST":
-                async with session.post(url, json=data) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            elif method == "PUT":
-                async with session.put(url, json=data) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            elif method == "DELETE":
-                async with session.delete(url) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            else:
-                raise HTTPException(status_code=405, detail="Method not allowed")
-        except aiohttp.ClientResponseError as e:
-            raise HTTPException(status_code=e.status, detail=e.message)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
 
-# Function to fetch the config for a given config id
-@app.get("/get/{config_id}", response_model=dict)
-async def get_resource(config_id):
+# Common function to handle all API Requests
+async def fetch_config(target_url, request_type, workflow_type="DEFAULT_WORKFLOW", payload=None):
     try:
-        target_url = REMOTE_SERVICE_URL + GET_API_PATH + config_id
+        if payload is None:
+            payload = dict()
         headers = {"Content-Type": "application/json"}
-        return await retriable_api_call(
-            "GET",
+        response = await retriable_api_call(
+            request_type,
             target_url,
-            headers=headers
+            headers=headers,
+            json=payload
         )
+        return response
     except aiohttp.ClientError as ce:
         logger.error(
-            f"There was an issue in fetching data for config with config_id = {config_id}. Error stacktrace as follows : {ce}"
+            f"Client errors occurred while interacting with CCS for the workflow : {workflow_type} . Error stacktrace as follows : {ce}"
         )
     except Exception as e:
-        raise Exception(f"Cannot get metadata caused by {e}") from e
+        logger.error(f"Unexpected errors occurred while interacting with CCS for the workflow : {workflow_type}. Error stacktrace as follows : {e}")
 
-# Example endpoint that proxies a POST request to the remote service
-@app.post("/proxy/{resource}", response_model=dict)
-async def post_resource(resource: str, payload: dict):
-    response = await fetch_remote_data(endpoint=resource, method="POST", data=payload)
-    return response
 
-# Example endpoint that proxies a PUT request to the remote service
-@app.put("/proxy/{resource}/{resource_id}", response_model=dict)
-async def update_resource(resource: str, resource_id: int, payload: dict):
-    response = await fetch_remote_data(endpoint=f"{resource}/{resource_id}", method="PUT", data=payload)
-    return response
+# Function to fetch the config for a given config id
+@app.get("/get_config_with_id/{config_id}")
+async def get_config_with_id(config_id):
+    target_url = "".join((REMOTE_SERVICE_URL, REQUEST_API_PATH, config_id))
+    logger.info(f"The CCS url is : {target_url}")
+    return await fetch_config(target_url=target_url,
+                              request_type="GET",
+                              workflow_type="GET_CONFIG_USING_ID")
 
-# Example endpoint that proxies a DELETE request to the remote service
-@app.delete("/proxy/{resource}/{resource_id}", response_model=dict)
-async def delete_resource(resource: str, resource_id: int):
-    response = await fetch_remote_data(endpoint=f"{resource}/{resource_id}", method="DELETE")
-    return response
+
+# Function to get the config history for a given config
+@app.post("/get_config_history/{config_id}")
+async def get_config_history(config_id, payload:dict):
+    target_url = "".join((REMOTE_SERVICE_URL, CONFIG_HISTORY_PATH, config_id, "/history"))
+    return await fetch_config(target_url=target_url,
+                              request_type="POST",
+                              workflow_type="GET_CONFIG_HISTORY",
+                              payload=payload)
+
+
+# Function to add a new version to an existing config
+@app.put("/put_config_with_id/{config_id}")
+async def put_config_with_id(config_id, payload:dict):
+    target_url = "".join((REMOTE_SERVICE_URL, REQUEST_API_PATH, config_id))
+    return await fetch_config(target_url=target_url,
+                              request_type="PUT",
+                              workflow_type="PUT_CONFIG_USING_ID",
+                              payload=payload)
+
+
+# Function to get the metadata information for a given namespace
+@app.post("/meta")
+async def get_config_meta(payload:dict):
+    target_url = "".join((REMOTE_SERVICE_URL, CONFIG_META_PATH))
+    return await fetch_config(target_url=target_url,
+                              request_type="POST",
+                              workflow_type="GET_CONFIG_META",
+                              payload=payload)
+
+
+# Function to delete the config using config_id
+@app.delete("/delete_config_with_id/{config_id}")
+async def delete_resource(config_id, payload: dict):
+    target_url = "".join((REMOTE_SERVICE_URL, REQUEST_API_PATH, config_id))
+    return await fetch_config(target_url=target_url,
+                              request_type="DELETE",
+                              workflow_type="DELETE_CONFIG_WITH_ID",
+                              payload=payload)
+
+
+# Function to create a new config on an existing namespace
+@app.post("/create_new_config")
+async def create_new_config(payload:dict):
+    target_url = "".join((REMOTE_SERVICE_URL, CONFIG_CREATE_PATH))
+    return await fetch_config(target_url=target_url,
+                              request_type="POST",
+                              workflow_type="CREATE_NEW_CONFIG",
+                              payload=payload)
